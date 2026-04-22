@@ -3,7 +3,6 @@
 // Mostly argument checking, since we don't trust
 // user code, and calls into file.c and fs.c.
 //
-
 #include "types.h"
 #include "defs.h"
 #include "param.h"
@@ -170,15 +169,14 @@ isdirempty(struct inode *dp)
 {
   int off;
   struct dirent de;
-
   for(off=2*sizeof(de); off<dp->size; off+=sizeof(de)){
     if(readi(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
       panic("isdirempty: readi");
     if(de.inum != 0)
-      return 0;
-  }
-  return 1;
+return 0;
 }
+return 1;
+} 
 
 //PAGEBREAK!
 int
@@ -282,6 +280,7 @@ create(char *path, short type, short major, short minor)
   return ip;
 }
 
+
 int
 sys_open(void)
 {
@@ -289,12 +288,10 @@ sys_open(void)
   int fd, omode;
   struct file *f;
   struct inode *ip;
-
+  int depth = 0;
   if(argstr(0, &path) < 0 || argint(1, &omode) < 0)
     return -1;
-
   begin_op();
-
   if(omode & O_CREATE){
     ip = create(path, T_FILE, 0, 0);
     if(ip == 0){
@@ -307,11 +304,31 @@ sys_open(void)
       return -1;
     }
     ilock(ip);
-    if(ip->type == T_DIR && omode != O_RDONLY){
+  }
+  while(ip->type == T_SYMLINK) {
+    if(depth >= 10) {
       iunlockput(ip);
       end_op();
       return -1;
     }
+    char target[MAXPATH];
+    if(readi(ip, target, 0, MAXPATH) <= 0) {
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
+    iunlockput(ip);
+    if((ip = namei(target)) == 0) {
+      end_op();
+      return -1;
+    }
+    ilock(ip);
+    depth++;
+  }
+  if(ip->type == T_DIR && omode != O_RDONLY){
+    iunlockput(ip);
+    end_op();
+    return -1;
   }
 
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
@@ -323,7 +340,6 @@ sys_open(void)
   }
   iunlock(ip);
   end_op();
-
   f->type = FD_INODE;
   f->ip = ip;
   f->off = 0;
@@ -331,7 +347,6 @@ sys_open(void)
   f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
   return fd;
 }
-
 int
 sys_mkdir(void)
 {
@@ -440,5 +455,34 @@ sys_pipe(void)
   }
   fd[0] = fd0;
   fd[1] = fd1;
+  return 0;
+}
+
+
+int
+sys_symlink(void)
+{
+  char *target, *linkpath;
+  struct inode *ip;
+
+  if(argstr(0, &target) < 0 || argstr(1, &linkpath) < 0)
+    return -1;
+
+  begin_op();
+
+  if((ip = create(linkpath, T_SYMLINK, 0, 0)) == 0){
+    end_op();
+    return -1;
+  }
+
+
+  if(writei(ip, target, 0, strlen(target)) != strlen(target)){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  iunlockput(ip);
+  end_op();
   return 0;
 }
